@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#23262B">
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Zeiten">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<title>Zeiterfassung</title>
+<!--
+  Handy-App der Zeiterfassung Anlagenbau.
+  - Läuft komplett offline (service-worker.js), Daten nur in der IndexedDB des Handys.
+  - Einmalige Einrichtung über eine *.zestamm-Datei aus dem Büro-Programm.
+  - Export als *.zezeit-Datei (JSON), die per Mail ins Büro geht und dort über
+    "Handy-Import…" eingelesen wird. Format siehe lese_handy_export() in
+    Entwicklung/zeiterfassung.py – Änderungen am Format immer an beiden Stellen!
+-->
+<style>
+  :root {
+    --paper: #F5F2EC; --panel: #FFFFFF; --ink: #23262B; --soft: #5B5851; --line: #DDD6C7;
+    --orange: #D9611E; --orange-dark: #B34E17; --steel: #3C6E8F; --danger: #B23A2E; --ok: #3D7A4A;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  header { background: var(--ink); color: #fff; padding: calc(env(safe-area-inset-top) + 12px) 16px 12px;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .name { font-size: 13px; color: #C9C4B6; }
+  header button { background: none; border: 1px solid #5B5851; color: #fff; border-radius: 8px; padding: 6px 10px; font-size: 14px; }
+  main { padding: 12px 16px calc(env(safe-area-inset-bottom) + 96px); max-width: 640px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .hinweis { background: #FFF4E5; border-color: #F0C79A; font-size: 14px; }
+  .hinweis b { display: block; margin-bottom: 4px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  label { display: block; font-size: 13px; color: var(--soft); margin: 10px 0 4px; }
+  input { width: 100%; font-size: 17px; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: #fff; color: var(--ink); -webkit-appearance: none; appearance: none; min-height: 44px; }
+  input:focus { outline: 2px solid var(--steel); border-color: var(--steel); }
+  .zeile { display: flex; gap: 10px; } .zeile > div { flex: 1; min-width: 0; }
+  button.primaer, button.zweit, button.gefahr { font-size: 16px; border-radius: 10px; padding: 12px 16px; min-height: 44px; border: 1px solid transparent; }
+  button.primaer { background: var(--orange); color: #fff; }
+  button.primaer:active { background: var(--orange-dark); }
+  button.zweit { background: #fff; color: var(--ink); border-color: var(--line); }
+  button.gefahr { background: #fff; color: var(--danger); border-color: #E7B8B2; }
+  button:disabled { opacity: .5; }
+  .knoepfe { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .knoepfe button { flex: 1; }
+  .fab { position: fixed; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 16px); z-index: 6;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25); border-radius: 28px; padding: 14px 22px; font-size: 17px; }
+  .woche-kopf { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .woche-kopf .summe { color: var(--soft); font-size: 14px; white-space: nowrap; }
+  .eintrag { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer; }
+  .eintrag:first-of-type { border-top: none; }
+  .eintrag .links { min-width: 0; }
+  .eintrag .tag { font-weight: 600; }
+  .eintrag .details { color: var(--soft); font-size: 14px; overflow-wrap: anywhere; }
+  .eintrag .std { font-weight: 600; white-space: nowrap; text-align: right; }
+  .marke { display: inline-block; font-size: 12px; border-radius: 6px; padding: 1px 6px; margin-left: 6px; vertical-align: 1px; }
+  .marke.offen { background: #FCE7D9; color: var(--orange-dark); }
+  .marke.gesendet { background: #E3F0E6; color: var(--ok); }
+  .leer { color: var(--soft); text-align: center; padding: 24px 8px; }
+  .klein { font-size: 13px; color: var(--soft); }
+  .vorschlaege { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .vorschlaege button { font-size: 14px; padding: 6px 10px; border-radius: 16px; border: 1px solid var(--line); background: #fff; color: var(--ink); min-height: 34px; }
+  .warnung { color: var(--danger); font-size: 13px; margin-top: 4px; min-height: 1em; }
+  .versteckt { display: none !important; }
+  dialog { border: none; border-radius: 14px; padding: 0; width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog .inhalt { padding: 16px; overflow-y: auto; max-height: calc(100vh - 24px); }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 90px);
+    background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 15px; z-index: 20; max-width: calc(100vw - 32px); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Zeiterfassung</h1>
+    <div class="name" id="kopfName"></div>
+  </div>
+  <button id="btnMenue" class="versteckt" aria-label="Einstellungen">Einstellungen</button>
+</header>
+
+<main>
+  <!-- Hinweis: App ist nicht auf dem Startbildschirm installiert -->
+  <div class="card hinweis versteckt" id="installHinweis">
+    <b>Bitte auf den Startbildschirm legen</b>
+    <span id="installText"></span>
+  </div>
+
+  <!-- Einrichtung -->
+  <section id="ansichtEinrichtung" class="versteckt">
+    <div class="card">
+      <h2>Einrichtung</h2>
+      <p>Das Büro hat dir eine Einrichtungsdatei geschickt (<b>Einrichtung_….zestamm</b>).
+         Speichere den Mail-Anhang in „Dateien“ bzw. „Downloads“ und wähle ihn hier aus.</p>
+      <input type="file" id="einrichtungDatei" class="versteckt">
+      <div class="knoepfe"><button class="primaer" id="btnEinrichtungLaden">Einrichtung laden</button></div>
+      <div class="warnung" id="einrichtungFehler"></div>
+    </div>
+  </section>
+
+  <!-- Liste -->
+  <section id="ansichtListe" class="versteckt">
+    <div class="card" id="sendenKarte">
+      <div class="woche-kopf"><h2 style="margin:0">Noch nicht gesendet</h2><span class="summe" id="offenAnzahl"></span></div>
+      <p class="klein" id="sendenText" style="margin:4px 0 0"></p>
+      <div class="knoepfe"><button class="primaer" id="btnSenden">Zeiten senden</button></div>
+    </div>
+    <div id="liste"></div>
+  </section>
+</main>
+
+<button class="primaer fab versteckt" id="btnNeu">+ Neuer Eintrag</button>
+
+<!-- Eintrag erfassen / bearbeiten -->
+<dialog id="dlgEintrag">
+  <form class="inhalt" id="formEintrag" method="dialog" novalidate>
+    <h2 id="formTitel">Neuer Eintrag</h2>
+    <div class="zeile">
+      <div><label for="fDatum">Tag</label><input type="date" id="fDatum" required></div>
+      <div><label for="fStunden">Stunden</label><input type="text" id="fStunden" inputmode="decimal" placeholder="z. B. 8,5" required></div>
+    </div>
+    <label for="fKommission">Kommissionsnummer (8-stellig)</label>
+    <input type="text" id="fKommission" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="z. B. 09526001">
+    <div class="vorschlaege" id="kommVorschlaege"></div>
+    <div class="warnung" id="kommWarnung"></div>
+    <div class="zeile">
+      <div><label for="fAbfahrt">Abfahrt</label><input type="time" id="fAbfahrt"></div>
+      <div><label for="fAnkunft">Ankunft</label><input type="time" id="fAnkunft"></div>
+    </div>
+    <label for="fOrt">Ort (optional)</label>
+    <input type="text" id="fOrt" autocomplete="off">
+    <label for="fInfo">Info (optional)</label>
+    <input type="text" id="fInfo" autocomplete="off">
+    <div class="warnung" id="formFehler"></div>
+    <div class="knoepfe">
+      <button type="button" class="zweit" id="btnAbbrechen">Abbrechen</button>
+      <button type="button" class="primaer" id="btnSpeichern">Speichern</button>
+    </div>
+    <div class="knoepfe" id="loeschenZeile"><button type="button" class="gefahr" id="btnLoeschen">Eintrag löschen</button></div>
+    <p class="klein versteckt" id="gesendetHinweis">Dieser Eintrag wurde schon gesendet und kann nicht mehr geändert werden.
+      Korrekturen bitte dem Büro melden.</p>
+  </form>
+</dialog>
+
+<!-- Einstellungen -->
+<dialog id="dlgMenue">
+  <div class="inhalt">
+    <h2>Einstellungen</h2>
+    <p class="klein" id="menueInfo"></p>
+    <div class="knoepfe"><button class="zweit" id="btnAlleNochmal">Alle Einträge erneut senden</button></div>
+    <p class="klein">Schickt alle Einträge (auch bereits gesendete) noch einmal, z. B. wenn eine Mail verloren ging.
+      Das Büro-Programm erkennt doppelte Einträge.</p>
+    <div class="knoepfe"><button class="zweit" id="btnNeuEinrichten">Einrichtung neu laden</button></div>
+    <div class="knoepfe"><button class="zweit" id="btnMenueZu">Schließen</button></div>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const EXPORT_FORMAT = "zeiterfassung-handy";
+const EINRICHTUNG_FORMAT = "zeiterfassung-einrichtung";
+const FORMAT_VERSION = 1;
+const WOCHENTAGE = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+const MAX_STUNDEN_TAG = 16;  // wie pruefe_plausibilitaet() im Büro-Programm
+
+// ---------- Speicher (IndexedDB) ------------------------------------------
+let dbPromise = null;
+function db() {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open("zeiterfassung", 1);
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        d.createObjectStore("meta");
+        d.createObjectStore("eintraege", { keyPath: "id" });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return dbPromise;
+}
+async function tx(store, modus, fn) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const t = d.transaction(store, modus);
+    const ergebnis = fn(t.objectStore(store));
+    t.oncomplete = () => resolve(ergebnis && "result" in ergebnis ? ergebnis.result : undefined);
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error);
+  });
+}
+const metaHolen = (k) => tx("meta", "readonly", (s) => s.get(k));
+const metaSetzen = (k, v) => tx("meta", "readwrite", (s) => s.put(v, k));
+const alleEintraege = () => tx("eintraege", "readonly", (s) => s.getAll());
+const eintragSpeichern = (e) => tx("eintraege", "readwrite", (s) => s.put(e));
+const eintragLoeschen = (id) => tx("eintraege", "readwrite", (s) => s.delete(id));
+async function alsGesendetMarkieren(ids, zeitpunkt) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const t = d.transaction("eintraege", "readwrite");
+    const s = t.objectStore("eintraege");
+    ids.forEach((id) => {
+      const r = s.get(id);
+      r.onsuccess = () => { if (r.result) { r.result.gesendet_am = zeitpunkt; s.put(r.result); } };
+    });
+    t.oncomplete = resolve; t.onerror = () => reject(t.error);
+  });
+}
+
+// ---------- Hilfsfunktionen ------------------------------------------------
+const $ = (id) => document.getElementById(id);
+function heuteIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function isoZuDatum(iso) { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d); }
+function fmtDatum(iso) { const [y, m, d] = iso.split("-"); return `${d}.${m}.${y}`; }
+function fmtTag(iso) { return `${WOCHENTAGE[isoZuDatum(iso).getDay()]}, ${fmtDatum(iso)}`; }
+function fmtStunden(h) { return (Math.round(h * 100) / 100).toString().replace(".", ","); }
+function isoWoche(iso) {  // ISO-Kalenderwoche: {jahr, kw}
+  const d = isoZuDatum(iso);
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const tagNr = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - tagNr);
+  const jahrStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return { jahr: t.getUTCFullYear(), kw: Math.ceil(((t - jahrStart) / 86400000 + 1) / 7) };
+}
+function neueId() {
+  if (crypto.randomUUID) return "handy-" + crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  return "handy-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+function dateiName(text) {
+  const ersatz = { "ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss" };
+  return text.replace(/[äöüÄÖÜß]/g, (c) => ersatz[c]).normalize("NFKD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^\w-]+/g, "_").replace(/^_+|_+$/g, "");
+}
+function toast(text) {
+  document.querySelectorAll(".toast").forEach((alt) => alt.remove());
+  const t = document.createElement("div");
+  t.className = "toast"; t.textContent = text;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+function istInstalliert() {
+  return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+// ---------- Zustand & Anzeige ----------------------------------------------
+let einrichtung = null;
+let eintraege = [];
+let bearbeitet = null;  // Eintrag, der gerade im Formular ist (null = neu)
+
+async function laden() {
+  einrichtung = await metaHolen("einrichtung");
+  eintraege = (await alleEintraege()) || [];
+  anzeigen();
+}
+
+function anzeigen() {
+  const eingerichtet = !!einrichtung;
+  $("ansichtEinrichtung").classList.toggle("versteckt", eingerichtet);
+  $("ansichtListe").classList.toggle("versteckt", !eingerichtet);
+  $("btnNeu").classList.toggle("versteckt", !eingerichtet);
+  $("btnMenue").classList.toggle("versteckt", !eingerichtet);
+  $("kopfName").textContent = eingerichtet ? einrichtung.mitarbeiter_name : "";
+
+  const installiert = istInstalliert();
+  $("installHinweis").classList.toggle("versteckt", installiert);
+  if (!installiert) {
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    $("installText").textContent = ios
+      ? "In Safari unten auf „Teilen“ tippen und „Zum Home-Bildschirm“ wählen. Nur dann bleiben die Einträge sicher gespeichert und die App startet ohne Internet."
+      : "Im Browser-Menü (⋮) „App installieren“ bzw. „Zum Startbildschirm hinzufügen“ wählen. Nur dann bleiben die Einträge sicher gespeichert und die App startet ohne Internet.";
+  }
+  if (!eingerichtet) return;
+
+  const offen = eintraege.filter((e) => !e.gesendet_am);
+  $("offenAnzahl").textContent = offen.length
+    ? `${offen.length} Eintr${offen.length === 1 ? "ag" : "äge"}, ${fmtStunden(offen.reduce((s, e) => s + e.stunden, 0))} Std.` : "";
+  $("sendenText").textContent = offen.length
+    ? "Schickt die Einträge als Datei per Mail ans Büro" + (einrichtung.buero_email ? ` (${einrichtung.buero_email}).` : ".")
+    : "Alles gesendet.";
+  $("btnSenden").disabled = offen.length === 0;
+
+  // Nach Kalenderwoche gruppiert, neueste zuerst
+  const liste = $("liste");
+  liste.innerHTML = "";
+  if (!eintraege.length) {
+    liste.innerHTML = '<div class="card leer">Noch keine Einträge.<br>Tippe auf „+ Neuer Eintrag“.</div>';
+    return;
+  }
+  const sortiert = [...eintraege].sort((a, b) => (b.date + b.geaendert_am).localeCompare(a.date + a.geaendert_am));
+  const wochen = new Map();
+  sortiert.forEach((e) => {
+    const w = isoWoche(e.date);
+    const key = `${w.jahr}-${String(w.kw).padStart(2, "0")}`;
+    if (!wochen.has(key)) wochen.set(key, { ...w, eintraege: [] });
+    wochen.get(key).eintraege.push(e);
+  });
+  for (const w of wochen.values()) {
+    const karte = document.createElement("div");
+    karte.className = "card";
+    const summe = w.eintraege.reduce((s, e) => s + e.stunden, 0);
+    karte.innerHTML = `<div class="woche-kopf"><h2 style="margin:0">KW ${w.kw} / ${w.jahr}</h2>
+      <span class="summe">${fmtStunden(summe)} Std.</span></div>`;
+    w.eintraege.forEach((e) => {
+      const z = document.createElement("div");
+      z.className = "eintrag";
+      const details = [e.kommission || "ohne Kommission", e.ort,
+        e.abfahrt || e.ankunft ? `${e.abfahrt || "–"}–${e.ankunft || "–"}` : "", e.info].filter(Boolean);
+      z.innerHTML = `<div class="links"><div class="tag"></div><div class="details"></div></div>
+        <div class="std">${fmtStunden(e.stunden)} h<br>
+        <span class="marke ${e.gesendet_am ? "gesendet" : "offen"}">${e.gesendet_am ? "gesendet" : "offen"}</span></div>`;
+      z.querySelector(".tag").textContent = fmtTag(e.date);
+      z.querySelector(".details").textContent = details.join(" · ");
+      z.addEventListener("click", () => formularOeffnen(e));
+      karte.appendChild(z);
+    });
+    liste.appendChild(karte);
+  }
+}
+
+// ---------- Einrichtung --------------------------------------------------
+$("btnEinrichtungLaden").addEventListener("click", () => $("einrichtungDatei").click());
+$("einrichtungDatei").addEventListener("change", async (ev) => {
+  const datei = ev.target.files[0];
+  ev.target.value = "";
+  if (!datei) return;
+  $("einrichtungFehler").textContent = "";
+  try {
+    const d = JSON.parse(await datei.text());
+    if (d.format !== EINRICHTUNG_FORMAT || d.version !== FORMAT_VERSION || !d.mitarbeiter_id)
+      throw new Error("Das ist keine gültige Einrichtungsdatei aus dem Büro-Programm.");
+    if (einrichtung && einrichtung.mitarbeiter_id !== d.mitarbeiter_id && eintraege.some((e) => !e.gesendet_am)
+        && !confirm(`Die Datei gehört zu ${d.mitarbeiter_name}, hier sind aber noch ungesendete Einträge von ` +
+                    `${einrichtung.mitarbeiter_name}. Trotzdem übernehmen?`)) return;
+    einrichtung = { mitarbeiter_id: d.mitarbeiter_id, mitarbeiter_name: d.mitarbeiter_name || "",
+                    buero_email: d.buero_email || "" };
+    await metaSetzen("einrichtung", einrichtung);
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    $("dlgMenue").close();
+    toast(`Eingerichtet für ${einrichtung.mitarbeiter_name}.`);
+    anzeigen();
+  } catch (err) {
+    $("einrichtungFehler").textContent = err instanceof SyntaxError
+      ? "Die Datei konnte nicht gelesen werden. Ist es die richtige Datei (….zestamm)?" : err.message;
+    if (einrichtung) alert($("einrichtungFehler").textContent);
+  }
+});
+
+// ---------- Formular -------------------------------------------------------
+function letzteKommissionen() {
+  // Zuletzt genutzte Nummern (neueste zuerst) mit dem dort zuletzt benutzten Ort
+  const nachZeit = [...eintraege].filter((e) => e.kommission)
+    .sort((a, b) => (b.date + b.geaendert_am).localeCompare(a.date + a.geaendert_am));
+  const gesehen = new Map();
+  nachZeit.forEach((e) => { if (!gesehen.has(e.kommission)) gesehen.set(e.kommission, e.ort || ""); });
+  return [...gesehen.entries()].slice(0, 6);
+}
+
+function vorschlaegeZeigen() {
+  const box = $("kommVorschlaege");
+  box.innerHTML = "";
+  if (bearbeitet && bearbeitet.gesendet_am) return;
+  const eingabe = $("fKommission").value;
+  letzteKommissionen().filter(([k]) => k !== eingabe && k.startsWith(eingabe)).forEach(([k, ort]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = ort ? `${k} · ${ort}` : k;
+    b.addEventListener("click", () => {
+      $("fKommission").value = k;
+      if (!$("fOrt").value) $("fOrt").value = ort;
+      kommissionPruefen(); vorschlaegeZeigen();
+    });
+    box.appendChild(b);
+  });
+}
+
+function kommissionPruefen() {
+  const k = $("fKommission").value.trim();
+  $("kommWarnung").textContent = k && !/^\d{8}$/.test(k) ? "Kommissionsnummern haben normalerweise 8 Ziffern." : "";
+}
+
+function formularOeffnen(eintrag) {
+  bearbeitet = eintrag || null;
+  const e = eintrag || {};
+  const gesperrt = !!e.gesendet_am;
+  $("formTitel").textContent = eintrag ? (gesperrt ? "Eintrag (gesendet)" : "Eintrag bearbeiten") : "Neuer Eintrag";
+  $("fDatum").value = e.date || heuteIso();
+  $("fStunden").value = e.stunden != null ? fmtStunden(e.stunden) : "";
+  $("fKommission").value = e.kommission || "";
+  $("fAbfahrt").value = e.abfahrt || "";
+  $("fAnkunft").value = e.ankunft || "";
+  $("fOrt").value = e.ort || "";
+  $("fInfo").value = e.info || "";
+  ["fDatum", "fStunden", "fKommission", "fAbfahrt", "fAnkunft", "fOrt", "fInfo"].forEach((id) => { $(id).disabled = gesperrt; });
+  $("btnSpeichern").classList.toggle("versteckt", gesperrt);
+  $("loeschenZeile").classList.toggle("versteckt", !eintrag || gesperrt);
+  $("gesendetHinweis").classList.toggle("versteckt", !gesperrt);
+  $("formFehler").textContent = "";
+  kommissionPruefen();
+  vorschlaegeZeigen();
+  $("dlgEintrag").showModal();
+}
+
+$("fKommission").addEventListener("input", () => {
+  $("fKommission").value = $("fKommission").value.replace(/\D/g, "").slice(0, 8);
+  kommissionPruefen(); vorschlaegeZeigen();
+});
+$("btnNeu").addEventListener("click", () => formularOeffnen(null));
+$("btnAbbrechen").addEventListener("click", () => $("dlgEintrag").close());
+
+$("btnSpeichern").addEventListener("click", async () => {
+  const fehler = (t) => { $("formFehler").textContent = t; };
+  const datum = $("fDatum").value;
+  const stunden = parseFloat($("fStunden").value.replace(",", "."));
+  const kommission = $("fKommission").value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datum)) return fehler("Bitte den Tag angeben.");
+  if (!(stunden >= 0 && stunden <= 24) || $("fStunden").value.trim() === "") return fehler("Bitte gültige Stunden (0–24) angeben.");
+  if (!kommission) return fehler("Bitte die Kommissionsnummer angeben.");
+
+  const warnungen = [];
+  if (!/^\d{8}$/.test(kommission)) warnungen.push("Die Kommissionsnummer hat nicht 8 Ziffern.");
+  const sonstige = eintraege.filter((e) => e.date === datum && (!bearbeitet || e.id !== bearbeitet.id));
+  if (sonstige.length) warnungen.push(`Für den ${fmtDatum(datum)} gibt es schon ${sonstige.length === 1 ? "einen Eintrag" : sonstige.length + " Einträge"}.`);
+  const tagSumme = sonstige.reduce((s, e) => s + e.stunden, 0) + stunden;
+  if (tagSumme > MAX_STUNDEN_TAG) warnungen.push(`Am ${fmtDatum(datum)} kämen insgesamt ${fmtStunden(tagSumme)} Stunden zusammen.`);
+  if (warnungen.length && !confirm(warnungen.join("\n") + "\n\nTrotzdem speichern?")) return;
+
+  const e = {
+    id: bearbeitet ? bearbeitet.id : neueId(),
+    date: datum, kommission, stunden,
+    abfahrt: $("fAbfahrt").value, ankunft: $("fAnkunft").value,
+    ort: $("fOrt").value.trim(), info: $("fInfo").value.trim(),
+    geaendert_am: new Date().toISOString(), gesendet_am: null,
+  };
+  try {
+    await eintragSpeichern(e);
+  } catch (err) {
+    return fehler("Speichern fehlgeschlagen: " + err.message);
+  }
+  $("dlgEintrag").close();
+  await laden();
+  toast("Gespeichert.");
+});
+
+$("btnLoeschen").addEventListener("click", async () => {
+  if (!bearbeitet || !confirm("Diesen Eintrag wirklich löschen?")) return;
+  await eintragLoeschen(bearbeitet.id);
+  $("dlgEintrag").close();
+  await laden();
+});
+
+// ---------- Senden ---------------------------------------------------------
+async function senden(liste) {
+  if (!liste.length) return;
+  const daten = liste.map((e) => isoWoche(e.date));
+  const kws = [...new Set(daten.map((w) => w.kw))];
+  const kwText = kws.length === 1 ? `KW${String(kws[0]).padStart(2, "0")}` : `KW${Math.min(...kws)}-${Math.max(...kws)}`;
+  const name = `Zeiten_${dateiName(einrichtung.mitarbeiter_name) || "Mitarbeiter"}_${daten[0].jahr}_${kwText}.zezeit`;
+  const inhalt = {
+    format: EXPORT_FORMAT, version: FORMAT_VERSION,
+    mitarbeiter_id: einrichtung.mitarbeiter_id, mitarbeiter_name: einrichtung.mitarbeiter_name,
+    erstellt_am: new Date().toISOString(),
+    eintraege: liste.map(({ id, date, kommission, ort, info, abfahrt, ankunft, stunden, geaendert_am }) =>
+      ({ id, date, kommission, ort, info, abfahrt, ankunft, stunden, geaendert_am })),
+  };
+  const datei = new File([JSON.stringify(inhalt, null, 1)], name, { type: "application/json" });
+  const betreff = `Zeiten ${einrichtung.mitarbeiter_name} ${kwText}`;
+  const zeitpunkt = new Date().toISOString();
+
+  if (navigator.canShare && navigator.canShare({ files: [datei] })) {
+    try {
+      await navigator.share({ files: [datei], title: betreff,
+        text: einrichtung.buero_email ? `An: ${einrichtung.buero_email}` : betreff });
+    } catch (err) {
+      if (err.name === "AbortError") { toast("Nicht gesendet."); return; }
+      alert("Teilen hat nicht geklappt: " + err.message);
+      return;
+    }
+  } else {
+    // Ersatzweg (z. B. am PC-Browser): Datei herunterladen, dann selbst an eine Mail hängen
+    const url = URL.createObjectURL(datei);
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    alert(`Die Datei „${name}“ wurde heruntergeladen. Bitte als Anhang per Mail ans Büro schicken` +
+          (einrichtung.buero_email ? ` (${einrichtung.buero_email}).` : "."));
+  }
+  if (confirm(`Wurde die Mail mit ${liste.length} Eintr${liste.length === 1 ? "ag" : "ägen"} abgeschickt?\n\n` +
+              `„OK“ markiert die Einträge als gesendet.`)) {
+    await alsGesendetMarkieren(liste.map((e) => e.id), zeitpunkt);
+    await laden();
+    toast("Als gesendet markiert.");
+  }
+}
+$("btnSenden").addEventListener("click", () => senden(eintraege.filter((e) => !e.gesendet_am)));
+
+// ---------- Einstellungen ------------------------------------------------
+$("btnMenue").addEventListener("click", () => {
+  $("menueInfo").textContent = `Eingerichtet für ${einrichtung.mitarbeiter_name}` +
+    (einrichtung.buero_email ? ` · Büro: ${einrichtung.buero_email}` : "") +
+    ` · ${eintraege.length} Einträge gespeichert.`;
+  $("dlgMenue").showModal();
+});
+$("btnMenueZu").addEventListener("click", () => $("dlgMenue").close());
+$("btnAlleNochmal").addEventListener("click", async () => { $("dlgMenue").close(); await senden([...eintraege]); });
+$("btnNeuEinrichten").addEventListener("click", () => $("einrichtungDatei").click());
+
+// ---------- Start ----------------------------------------------------------
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.register("service-worker.js").catch(() => {});
+}
+laden().catch((err) => {
+  document.querySelector("main").innerHTML =
+    `<div class="card hinweis"><b>Speicher nicht verfügbar</b>${err && err.message ? err.message : ""}<br>
+     Bitte nicht im privaten Modus öffnen.</div>`;
+});
+</script>
+</body>
+</html>
