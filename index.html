@@ -169,6 +169,7 @@
 const EXPORT_FORMAT = "zeiterfassung-handy";
 const EINRICHTUNG_FORMAT = "zeiterfassung-einrichtung";
 const FORMAT_VERSION = 1;
+const APP_VERSION = "4";  // gleich halten mit APP_VERSION in service-worker.js
 const WOCHENTAGE = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 const MAX_STUNDEN_TAG = 16;  // wie pruefe_plausibilitaet() im Büro-Programm
 
@@ -400,7 +401,7 @@ function formularOeffnen(eintrag) {
   const gesperrt = !!e.gesendet_am;
   $("formTitel").textContent = eintrag ? (gesperrt ? "Eintrag (gesendet)" : "Eintrag bearbeiten") : "Neuer Eintrag";
   $("fDatum").value = e.date || heuteIso();
-  $("fStunden").value = e.stunden != null ? fmtStunden(e.stunden) : "";
+  $("fStunden").value = e.stunden != null ? fmtStunden(e.stunden) : "8";  // neuer Eintrag: 8 Std. vorbelegt
   $("fKommission").value = e.kommission || "";
   $("fAbfahrt").value = e.abfahrt || "";
   $("fAnkunft").value = e.ankunft || "";
@@ -522,7 +523,7 @@ $("btnSenden").addEventListener("click", () => senden(eintraege.filter((e) => !e
 $("btnMenue").addEventListener("click", () => {
   $("menueInfo").textContent = `Eingerichtet für ${einrichtung.mitarbeiter_name}` +
     (einrichtung.buero_email ? ` · Büro: ${einrichtung.buero_email}` : "") +
-    ` · ${eintraege.length} Einträge gespeichert.`;
+    ` · ${eintraege.length} Einträge gespeichert · App-Version ${APP_VERSION}`;
   $("dlgMenue").showModal();
 });
 $("btnMenueZu").addEventListener("click", () => $("dlgMenue").close());
@@ -531,7 +532,25 @@ $("btnNeuEinrichten").addEventListener("click", () => $("einrichtungDatei").clic
 
 // ---------- Start ----------------------------------------------------------
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
-  navigator.serviceWorker.register("service-worker.js").catch(() => {});
+  // Bei jedem Start nach einer neuen App-Version schauen (updateViaCache "none": nicht
+  // aus dem Browser-Cache). Übernimmt eine neue Version, lädt die Seite einmal neu –
+  // aber nicht, solange gerade ein Eintrag bearbeitet wird.
+  const hatteSteuerung = !!navigator.serviceWorker.controller;
+  let neuGeladen = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hatteSteuerung || neuGeladen) return;
+    const neuLaden = () => { if (!neuGeladen) { neuGeladen = true; location.reload(); } };
+    if ($("dlgEintrag").open) $("dlgEintrag").addEventListener("close", neuLaden, { once: true });
+    else neuLaden();
+  });
+  navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" })
+    .then((reg) => {
+      reg.update().catch(() => {});
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") reg.update().catch(() => {});
+      });
+    })
+    .catch(() => {});
 }
 laden().catch((err) => {
   document.querySelector("main").innerHTML =
