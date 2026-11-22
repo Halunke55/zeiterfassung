@@ -288,9 +288,11 @@ function anzeigen() {
   const offen = eintraege.filter((e) => !e.gesendet_am);
   $("offenAnzahl").textContent = offen.length
     ? `${offen.length} Eintr${offen.length === 1 ? "ag" : "äge"}, ${fmtStunden(offen.reduce((s, e) => s + e.stunden, 0))} Std.` : "";
-  $("sendenText").textContent = offen.length
-    ? "Schickt die Einträge als Datei per Mail ans Büro" + (einrichtung.buero_email ? ` (${einrichtung.buero_email}).` : ".")
-    : "Alles gesendet.";
+  $("sendenText").textContent = !offen.length ? "Alles gesendet."
+    : einrichtung.buero_email
+      ? `Schickt die Einträge als Datei per Mail ans Büro. Die Adresse (${einrichtung.buero_email}) wird ` +
+        "dabei kopiert: im Mail-Fenster auf „An:“ tippen und „Einsetzen“ wählen."
+      : "Schickt die Einträge als Datei per Mail ans Büro. Bitte die Büro-Adresse bei „An:“ eintragen.";
   $("btnSenden").disabled = offen.length === 0;
 
   // Nach Kalenderwoche gruppiert, neueste zuerst
@@ -478,12 +480,20 @@ async function senden(liste) {
   };
   const datei = new File([JSON.stringify(inhalt, null, 1)], name, { type: "application/json" });
   const betreff = `Zeiten ${einrichtung.mitarbeiter_name} ${kwText}`;
+  const mailText = `${betreff} – ${liste.length} Eintr${liste.length === 1 ? "ag" : "äge"}`;
   const zeitpunkt = new Date().toISOString();
+
+  // Das Teilen-Menü kann (technisch bedingt, iOS wie Android) keinen Empfänger vorbelegen.
+  // Deshalb die Büro-Adresse in die Zwischenablage legen: im Mail-Fenster bei "An:"
+  // einfach "Einsetzen". Bewusst ohne await, damit navigator.share() noch innerhalb
+  // des Klicks aufgerufen wird (sonst verweigert Safari das Teilen).
+  if (einrichtung.buero_email && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(einrichtung.buero_email).catch(() => {});
+  }
 
   if (navigator.canShare && navigator.canShare({ files: [datei] })) {
     try {
-      await navigator.share({ files: [datei], title: betreff,
-        text: einrichtung.buero_email ? `An: ${einrichtung.buero_email}` : betreff });
+      await navigator.share({ files: [datei], title: betreff, text: mailText });
     } catch (err) {
       if (err.name === "AbortError") { toast("Nicht gesendet."); return; }
       alert("Teilen hat nicht geklappt: " + err.message);

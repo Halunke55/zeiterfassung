@@ -1,7 +1,7 @@
 // Offline-Start der Zeiterfassungs-App: alle App-Dateien werden beim ersten Laden
 // zwischengespeichert. Bei einer neuen Version der App CACHE_NAME hochzählen.
 // Die erfassten Zeiten liegen NICHT hier, sondern in der IndexedDB des Handys.
-const CACHE_NAME = "zeiterfassung-v1";
+const CACHE_NAME = "zeiterfassung-v2";
 const DATEIEN = ["./", "./index.html", "./manifest.webmanifest",
                  "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
