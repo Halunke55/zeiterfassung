@@ -169,7 +169,7 @@
 const EXPORT_FORMAT = "zeiterfassung-handy";
 const EINRICHTUNG_FORMAT = "zeiterfassung-einrichtung";
 const FORMAT_VERSION = 1;
-const APP_VERSION = "4";  // gleich halten mit APP_VERSION in service-worker.js
+const APP_VERSION = "5";  // gleich halten mit APP_VERSION in service-worker.js
 const WOCHENTAGE = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 const MAX_STUNDEN_TAG = 16;  // wie pruefe_plausibilitaet() im Büro-Programm
 
@@ -403,8 +403,9 @@ function formularOeffnen(eintrag) {
   $("fDatum").value = e.date || heuteIso();
   $("fStunden").value = e.stunden != null ? fmtStunden(e.stunden) : "8";  // neuer Eintrag: 8 Std. vorbelegt
   $("fKommission").value = e.kommission || "";
-  $("fAbfahrt").value = e.abfahrt || "";
-  $("fAnkunft").value = e.ankunft || "";
+  // Neuer Eintrag: übliche Zeiten vorbelegen; bestehende Einträge behalten ihre Werte (auch leer)
+  $("fAbfahrt").value = eintrag ? (e.abfahrt || "") : "06:00";
+  $("fAnkunft").value = eintrag ? (e.ankunft || "") : "18:00";
   $("fOrt").value = e.ort || "";
   $("fInfo").value = e.info || "";
   ["fDatum", "fStunden", "fKommission", "fAbfahrt", "fAnkunft", "fOrt", "fInfo"].forEach((id) => { $(id).disabled = gesperrt; });
